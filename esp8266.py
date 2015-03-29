@@ -25,10 +25,42 @@ class ESP8266(object):
     self._serial = serial
     self.sendCmd('AT')
 
+  # General
+
+  def sendCmd(self, cmd, retries=3):
+    '''Send an AT command with automatic retries. If retries are exhausted, the final exception is
+    forwarded to the client. If successful, the response lines are returned in a list.'''
+    for i in range(retries):
+      try:
+        return self._sendCmd(cmd)
+      except ESP8266Exception:
+        if i == retries - 1:
+          raise
+
+  def sendBuffer(self, protocol_str, host_str, port_int, buf):
+    '''Make a TCP or UDP connection and send a buffer. Reuses an existing
+    connection if possible. Disconnects from old host and reconnects to new host
+    if necessary.'''
+    self.sendCmd('AT+CIPMUX=0')
+    currentStatus_str, currentProtocol_str, currentHost_str, currentPort_int = self.getCipStatus()
+    print currentStatus_str, currentProtocol_str, currentHost_str, currentPort_int
+    if currentProtocol_str != protocol_str or currentHost_str != host_str or currentPort_int != port_int:
+      if currentStatus_str in ('GOTIP', 'CONNECTED'):
+        self.closeCip()
+      self.startCip(protocol_str, host_str, port_int)
+    while buf:
+      self._sendBuffer(buf[:MAX_CIPSEND_BUFFER_SIZE])
+      buf = buf[MAX_CIPSEND_BUFFER_SIZE:]
+
+  # Access Point
+  
   def scanForAccessPoints(self):
     return self.sendCmd('AT+CWLAP')
 
   def connectToAccessPoint(self, ssid_str, password_str):
+    '''Call is ignored if already connected to the given access point. If
+    already connected to another access point, the old access point is
+    automatically disconnected first.'''
     current_ssid_str = self.getConnectedAccessPoint()
     if current_ssid_str == ssid_str:
       logging.info('Already connected to access point: {}'.format(ssid_str))
@@ -50,40 +82,7 @@ class ESP8266(object):
       m = re.match(r'\+CWJAP:"(.*)"', responseLines_list[0])
       return m.group(1)
 
-  def setDeviceMode(self, deviceMode_int):
-    '''1=client, 2=AP, 3=both'''
-    currentDeviceMode_int = self.getDeviceMode()
-    if currentDeviceMode_int != deviceMode_int:
-      self.sendCmd('AT+CWMODE={}'.format(deviceMode_int))
-
-  def getDeviceMode(self):
-    responseLines_list = self.sendCmd('AT+CWMODE?')
-    m = re.match(r'\+CWMODE:(\d)', responseLines_list[0])
-    return int(m.group(1))
-
-  def getIPAddress(self):
-    responseLines_list = self.sendCmd('AT+CIFSR')
-    return responseLines_list[0]
-
-  def sendCmd(self, cmd, retries=3):
-    for i in range(retries):
-      try:
-        return self._sendCmd(cmd)
-      except ESP8266Exception:
-        if i == retries - 1:
-          raise
-
-  def sendBuffer(self, protocol_str, host_str, port_int, buf):
-    self.sendCmd('AT+CIPMUX=0')
-    currentStatus_str, currentProtocol_str, currentHost_str, currentPort_int = self.getCipStatus()
-    print currentStatus_str, currentProtocol_str, currentHost_str, currentPort_int
-    if currentProtocol_str != protocol_str or currentHost_str != host_str or currentPort_int != port_int:
-      if currentStatus_str in ('GOTIP', 'CONNECTED'):
-        self.closeCip()
-      self.startCip(protocol_str, host_str, port_int)
-    while buf:
-      self._sendBuffer(buf[:MAX_CIPSEND_BUFFER_SIZE])
-      buf = buf[MAX_CIPSEND_BUFFER_SIZE:]
+  # CIP
 
   def startCip(self, protocol_str, host_str, port_int):
     cmd = 'AT+CIPSTART="UDP","{}",{}'.format(host_str, port_int)
@@ -104,6 +103,25 @@ class ESP8266(object):
   def closeCip(self):
     return self._sendCmd('AT+CIPCLOSE')
   
+  # Device Mode
+
+  def getDeviceMode(self):
+    responseLines_list = self.sendCmd('AT+CWMODE?')
+    m = re.match(r'\+CWMODE:(\d)', responseLines_list[0])
+    return int(m.group(1))
+
+  def setDeviceMode(self, deviceMode_int):
+    '''1=client, 2=AP, 3=both'''
+    currentDeviceMode_int = self.getDeviceMode()
+    if currentDeviceMode_int != deviceMode_int:
+      self.sendCmd('AT+CWMODE={}'.format(deviceMode_int))
+
+  # Misc
+  
+  def getIPAddress(self):
+    responseLines_list = self.sendCmd('AT+CIFSR')
+    return responseLines_list[0]
+
   #
   # Private.
   #
